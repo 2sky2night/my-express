@@ -1,5 +1,5 @@
 import http from 'http'
-import { Route, Middleware, Middlewares, Routes, Request, Response, Next } from './types';
+import { Middleware, Middlewares, Request, Response, Next } from './types';
 
 /**
  * express构造函数
@@ -10,16 +10,11 @@ class Express {
    */
   private server: http.Server
   /**
-   * 路由表
-   */
-  private routes: Routes
-  /**
    * 全局中间件
    */
   private middlewares: Middlewares
   constructor() {
     this.server = http.createServer();
-    this.routes = [];
     this.middlewares = [];
   }
   /**
@@ -27,7 +22,7 @@ class Express {
    * @param port 端口号 
    * @param cb 回调
    */
-  listen(port: number, cb: any) {
+  listen(port: number, cb?: any) {
     this.server.listen(port, cb);
   }
   /**
@@ -37,26 +32,15 @@ class Express {
   use(middleware: Middleware) {
     this.middlewares.push(middleware);
   }
+
   /**
-   * 注册路由
-   * @param routes 路由表
+   * 启动http请求监听
    */
-  addRoutes(routes: Routes) {
-    routes.forEach((route) => this.routes.push(route));
-  }
-  /**
-   * 创建路由(启动监听)
-   */
-  createRouter() {
-    this.server.on("request", async (req, res) => {
+  start() {
+    this.server.on("request", (req, res) => {
       const request = this.initRequest(req);
       // 执行全局中间件
-      const flag = await this.execMiddleware(request, res, this.middlewares);
-      if (flag) {
-        // 所有中间件被执行了,都放行了
-        // 通过请求上下文去命中路由
-        await this.hitRouting(request, res);
-      }
+      this.execMiddleware(request, res, this.middlewares);
     });
   }
   /**
@@ -71,19 +55,17 @@ class Express {
     loop: for (; i < middlewares.length; i++) {
       try {
         // 处理某个中间件
-        await new Promise<void>((resolve, reject) => {
+        await new Promise<void>(async (resolve, reject) => {
           // 创建next函数
-          const next: Next = (flag) => {
-            if (flag || flag === undefined) {
-              // 放行
-              resolve();
+          const next: Next = (flag = true) => {
+            if (flag) {
+              resolve()
             } else {
-              // 不放行
-              reject();
+              reject()
             }
           };
           // 执行对应中间件
-          middlewares[i](req, res, next);
+          await middlewares[i](req, res, next);
         });
       } catch (error) {
         // 捕获某个中间件执行中若执行了next(false)，catch捕获Promise错误，终止循环
@@ -94,45 +76,7 @@ class Express {
     // 所有的中间件是否执行完了?
     return i === this.middlewares.length;
   }
-  /**
-   * 命中路由
-   * @param req 
-   * @param res 
-   */
-  private async hitRouting(req: Request, res: Response) {
-    const { path, method } = req;
-    // 匹配路由
-    const index = this.routes.findIndex((route) => {
-      return route.path === path && route.method.toUpperCase() === method;
-    });
 
-    if (index === -1) {
-      // 未匹配到路由
-      res.statusCode = 404;
-      res.setHeader("content-type", "application/json");
-      res.end(
-        JSON.stringify({
-          code: 404,
-          message: "404 not found!",
-          path,
-          method,
-        })
-      );
-    } else {
-      // 匹配到路由了
-      const route = this.routes[index];
-      // 执行中间件
-      if (route.middlewares && route.middlewares.length) {
-        const flag = await this.execMiddleware(req, res, route.middlewares)
-        if (!flag) {
-          // 未执行完路由的所有内部中间件
-          return
-        }
-      }
-      // 将请求上下文注入到控制层中
-      route.controller(req, res);
-    }
-  }
   /**
    * 初始化本次请求时的请求上下文
    * @param req 
